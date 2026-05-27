@@ -534,6 +534,12 @@ def render_app():
             floatingFilter=False,
             minWidth=120,
             width=140,
+            suppressMenu=False,
+            menuTabs=["filterMenuTab", "generalMenuTab", "columnsMenuTab"],
+            filterParams={
+                "buttons": ["apply", "reset"],
+                "closeOnApply": True,
+            },
         )
         for narrow_col in ["单箱容量", "建议箱数", "格口长", "格口宽", "格口高", "综合评分"]:
             if narrow_col in disp.columns:
@@ -554,6 +560,7 @@ def render_app():
             height=420,
             theme="streamlit",
             allow_unsafe_jscode=True,
+            enable_enterprise_modules=True,
         )
     else:
         st.caption("安装 streamlit-aggrid 后，表头会显示筛选框：pip install streamlit-aggrid")
