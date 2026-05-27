@@ -186,11 +186,13 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                         if v_len > b_w or h_len > b_l:
                             continue
 
-                        k = max(1, int((b_h - t) // (div_height + t)))
+                        max_layer_count = max(1, int((b_h - t) // (div_height + t)))
                         h_slots = float(h_div[DIV_COLS["slots"]])
                         v_slots = float(v_div[DIV_COLS["slots"]])
 
                         for h_count_per_layer, v_count_per_layer in possible_divider_counts(h_slots, v_slots):
+                            has_grid_support = h_count_per_layer > 0 and v_count_per_layer > 0
+                            k = max_layer_count if has_grid_support else 1
                             n = v_count_per_layer + 1
                             m = h_count_per_layer + 1
 
@@ -208,6 +210,8 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
 
                             capacity = int(n * m * k)
                             if capacity <= 0:
+                                continue
+                            if capacity > 1 and not has_grid_support:
                                 continue
 
                             cell_volume = cell_l * cell_w * cell_h
