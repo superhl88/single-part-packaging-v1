@@ -127,6 +127,24 @@ def possible_divider_counts(h_slots, v_slots):
                 yield h_count, v_count
 
 
+def possible_layout_configs(h_slots, v_slots):
+    """Generate divider layouts.
+
+    There are two physical meanings:
+    - grid: dividers split the carton into several cells.
+    - frame: two horizontal and two vertical dividers form one large supported cell.
+    """
+    for h_count, v_count in possible_divider_counts(h_slots, v_slots):
+        if h_count == 0 and v_count == 0:
+            yield "无刀卡", h_count, v_count, 1, 1
+            continue
+
+        yield "分格", h_count, v_count, v_count + 1, h_count + 1
+
+        if h_count >= 2 and v_count >= 2:
+            yield "围框", h_count, v_count, 1, 1
+
+
 def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
     """Find packaging options for a part and target order quantity."""
     p_l, p_w, p_h = part_dim
@@ -190,17 +208,22 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                         h_slots = float(h_div[DIV_COLS["slots"]])
                         v_slots = float(v_div[DIV_COLS["slots"]])
 
-                        for h_count_per_layer, v_count_per_layer in possible_divider_counts(h_slots, v_slots):
-                            has_grid_support = h_count_per_layer > 0 and v_count_per_layer > 0
-                            k = max_layer_count if has_grid_support else 1
-                            n = v_count_per_layer + 1
-                            m = h_count_per_layer + 1
+                        for layout_mode, h_count_per_layer, v_count_per_layer, n, m in possible_layout_configs(h_slots, v_slots):
+                            has_support = layout_mode != "无刀卡"
+                            if target_qty > 1 and not has_support:
+                                continue
+                            k = max_layer_count if has_support else 1
 
-                            cell_l = (b_l - v_count_per_layer * t) / n
+                            if layout_mode == "围框":
+                                cell_l = b_l
+                                cell_w = b_w
+                            else:
+                                cell_l = (b_l - v_count_per_layer * t) / n
+                                cell_w = (b_w - h_count_per_layer * t) / m
+
                             if cell_l < pl or not cell_allowed_by_divider(cell_l, v_div):
                                 continue
 
-                            cell_w = (b_w - h_count_per_layer * t) / m
                             if cell_w < pw or not cell_allowed_by_divider(cell_w, h_div):
                                 continue
 
@@ -211,7 +234,7 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                             capacity = int(n * m * k)
                             if capacity <= 0:
                                 continue
-                            if capacity > 1 and not has_grid_support:
+                            if capacity > 1 and not has_support:
                                 continue
 
                             cell_volume = cell_l * cell_w * cell_h
@@ -254,6 +277,7 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                             results.append({
                                 "推荐纸箱": box_model,
                                 "可用刀卡限制": match_label,
+                                "结构方式": layout_mode,
                                 "排布方式": f"{n}x{m}x{k}",
                                 "单箱容量": capacity,
                                 "建议箱数": box_count,
@@ -279,6 +303,7 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                     "tight_gap": t,
                                     "div_height": div_height,
                                     "rotate_note": rotate_note,
+                                    "layout_mode": layout_mode,
                                 },
                             })
         except Exception:
