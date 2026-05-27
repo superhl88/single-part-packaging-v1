@@ -215,8 +215,8 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                             k = max_layer_count if has_support else 1
 
                             if layout_mode == "围框":
-                                cell_l = b_l
-                                cell_w = b_w
+                                cell_l = b_l - (2 * t if v_count_per_layer >= 2 else v_count_per_layer * t)
+                                cell_w = b_w - (2 * t if h_count_per_layer >= 2 else h_count_per_layer * t)
                             else:
                                 cell_l = (b_l - v_count_per_layer * t) / n
                                 cell_w = (b_w - h_count_per_layer * t) / m
@@ -304,6 +304,8 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                     "div_height": div_height,
                                     "rotate_note": rotate_note,
                                     "layout_mode": layout_mode,
+                                    "h_count_per_layer": h_count_per_layer,
+                                    "v_count_per_layer": v_count_per_layer,
                                 },
                             })
         except Exception:
@@ -341,7 +343,7 @@ def _add_box_mesh(fig, x, y, z, color, opacity, name):
     ))
 
 
-def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6):
+def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6, layout_mode="分格", h_count=0, v_count=0):
     """Draw a carton and divider grid in 3D."""
     b_l, b_w, b_h = box_dim
     pl, pw, _ = part_dim_tuple
@@ -368,8 +370,19 @@ def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6):
         z_bot = t + layer * (vh + t)
         z_top = z_bot + vh
 
-        for i in range(1, m):
-            y_pos = side_gap_w + i * (pw + t) - t / 2
+        if layout_mode == "围框":
+            h_positions = []
+            if h_count >= 1:
+                h_positions.append(t / 2)
+            if h_count >= 2:
+                h_positions.append(b_w - t / 2)
+            if h_count > 2:
+                for i in range(1, h_count - 1):
+                    h_positions.append(i * b_w / (h_count - 1))
+        else:
+            h_positions = [side_gap_w + i * (pw + t) - t / 2 for i in range(1, m)]
+
+        for y_pos in h_positions:
             _add_box_mesh(
                 fig,
                 x=[0, b_l, b_l, 0, 0, b_l, b_l, 0],
@@ -385,8 +398,19 @@ def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6):
                 name="横刀板",
             )
 
-        for j in range(1, n):
-            x_pos = side_gap_l + j * (pl + t) - t / 2
+        if layout_mode == "围框":
+            v_positions = []
+            if v_count >= 1:
+                v_positions.append(t / 2)
+            if v_count >= 2:
+                v_positions.append(b_l - t / 2)
+            if v_count > 2:
+                for j in range(1, v_count - 1):
+                    v_positions.append(j * b_l / (v_count - 1))
+        else:
+            v_positions = [side_gap_l + j * (pl + t) - t / 2 for j in range(1, n)]
+
+        for x_pos in v_positions:
             _add_box_mesh(
                 fig,
                 x=[
@@ -493,6 +517,7 @@ def render_app():
 ### 领料 BOM 清单
 - **纸箱型号**：{item["推荐纸箱"]}
 - **建议箱数**：{box_count} 个
+- **结构方式**：{item["结构方式"]}
 - **允许刀卡**：{item["可用刀卡限制"]}
 - **横刀型号**：{item["横刀型号"]}，单箱 **{item["横刀总数"]}** 把，合计 **{item["横刀总数"] * box_count}** 把
 - **竖刀型号**：{item["竖刀型号"]}，单箱 **{item["竖刀总数"]}** 把，合计 **{item["竖刀总数"] * box_count}** 把
@@ -509,6 +534,9 @@ def render_app():
                 item["raw"]["part"],
                 item["raw"]["layout"],
                 item["raw"]["div_height"],
+                layout_mode=item["raw"].get("layout_mode", "分格"),
+                h_count=item["raw"].get("h_count_per_layer", 0),
+                v_count=item["raw"].get("v_count_per_layer", 0),
             ),
             use_container_width=True,
         )
