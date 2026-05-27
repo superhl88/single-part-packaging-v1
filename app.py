@@ -131,8 +131,8 @@ def possible_layout_configs(h_slots, v_slots):
     """Generate divider layouts.
 
     There are two physical meanings:
-    - grid: dividers split the carton into several cells.
-    - frame: two horizontal and two vertical dividers form one large supported cell.
+    - grid: every divider is treated as an internal separator.
+    - bordered grid: two edge dividers form support borders, extra dividers split inside.
     """
     for h_count, v_count in possible_divider_counts(h_slots, v_slots):
         if h_count == 0 and v_count == 0:
@@ -142,7 +142,25 @@ def possible_layout_configs(h_slots, v_slots):
         yield "分格", h_count, v_count, v_count + 1, h_count + 1
 
         if h_count >= 2 and v_count >= 2:
-            yield "围框", h_count, v_count, 1, 1
+            yield "边框分格", h_count, v_count, v_count - 1, h_count - 1
+
+
+def part_orientations(length, width, height):
+    """Generate unique part orientations mapped to carton length, width, height."""
+    candidates = [
+        (length, width, height, "长宽高不旋转"),
+        (width, length, height, "长宽旋转"),
+        (length, height, width, "宽转高度"),
+        (height, length, width, "宽转高度且底面旋转"),
+        (width, height, length, "长转高度"),
+        (height, width, length, "长转高度且底面旋转"),
+    ]
+    seen = set()
+    for pl, pw, ph, note in candidates:
+        key = (pl, pw, ph)
+        if key not in seen:
+            seen.add(key)
+            yield pl, pw, ph, note
 
 
 def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
@@ -183,9 +201,9 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
             if h_divs.empty or v_divs.empty:
                 continue
 
-            # Try two part orientations on the carton floor.
-            for pl, pw, rotate_note in [(p_l, p_w, "长宽不旋转"), (p_w, p_l, "长宽旋转")]:
-                if pl > b_l or pw > b_w or p_h > b_h:
+            # Try all three-dimensional part orientations.
+            for pl, pw, ph, rotate_note in part_orientations(p_l, p_w, p_h):
+                if pl > b_l or pw > b_w or ph > b_h:
                     continue
 
                 for _, v_div in v_divs.iterrows():
@@ -214,9 +232,9 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                 continue
                             k = max_layer_count if has_support else 1
 
-                            if layout_mode == "围框":
-                                cell_l = b_l - (2 * t if v_count_per_layer >= 2 else v_count_per_layer * t)
-                                cell_w = b_w - (2 * t if h_count_per_layer >= 2 else h_count_per_layer * t)
+                            if layout_mode == "边框分格":
+                                cell_l = (b_l - v_count_per_layer * t) / n
+                                cell_w = (b_w - h_count_per_layer * t) / m
                             else:
                                 cell_l = (b_l - v_count_per_layer * t) / n
                                 cell_w = (b_w - h_count_per_layer * t) / m
@@ -228,10 +246,13 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                 continue
 
                             cell_h = div_height
-                            if cell_h < p_h:
+                            if cell_h < ph:
                                 continue
 
-                            capacity = int(n * m * k)
+                            part_count_l = n
+                            part_count_w = m
+
+                            capacity = int(part_count_l * part_count_w * k)
                             if capacity <= 0:
                                 continue
                             if capacity > 1 and not has_support:
@@ -249,7 +270,7 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                             dim_closeness = (
                                 min(pl / cell_l, 1) *
                                 min(pw / cell_w, 1) *
-                                min(p_h / cell_h, 1)
+                                min(ph / cell_h, 1)
                             )
 
                             if target_qty <= 1:
@@ -278,7 +299,7 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                 "推荐纸箱": box_model,
                                 "可用刀卡限制": match_label,
                                 "结构方式": layout_mode,
-                                "排布方式": f"{n}x{m}x{k}",
+                                "排布方式": f"{part_count_l}x{part_count_w}x{k}",
                                 "单箱容量": capacity,
                                 "建议箱数": box_count,
                                 "格口长": cell_l,
@@ -297,8 +318,8 @@ def find_best_packaging_logic(part_dim, target_qty, boxes_df, divs_df, t=6):
                                 "备注": remark,
                                 "raw": {
                                     "box": (b_l, b_w, b_h),
-                                    "part": (pl, pw, p_h),
-                                    "layout": (n, m, k),
+                                    "part": (pl, pw, ph),
+                                    "layout": (part_count_l, part_count_w, k),
                                     "cell": (cell_l, cell_w, cell_h),
                                     "tight_gap": t,
                                     "div_height": div_height,
@@ -370,7 +391,7 @@ def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6, layout_mode="分格
         z_bot = t + layer * (vh + t)
         z_top = z_bot + vh
 
-        if layout_mode == "围框":
+        if layout_mode == "边框分格":
             h_positions = []
             if h_count >= 1:
                 h_positions.append(t / 2)
@@ -398,7 +419,7 @@ def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6, layout_mode="分格
                 name="横刀板",
             )
 
-        if layout_mode == "围框":
+        if layout_mode == "边框分格":
             v_positions = []
             if v_count >= 1:
                 v_positions.append(t / 2)
