@@ -528,14 +528,24 @@ def render_app():
     if AgGrid and GridOptionsBuilder:
         grid_builder = GridOptionsBuilder.from_dataframe(disp)
         grid_builder.configure_default_column(
-            filter=True,
+            filter="agSetColumnFilter",
             sortable=True,
             resizable=True,
-            floatingFilter=True,
+            floatingFilter=False,
+            minWidth=120,
+            width=140,
         )
+        for narrow_col in ["单箱容量", "建议箱数", "格口长", "格口宽", "格口高", "综合评分"]:
+            if narrow_col in disp.columns:
+                grid_builder.configure_column(narrow_col, minWidth=100, width=110)
+        for wide_col in ["推荐纸箱", "可用刀卡限制", "备注"]:
+            if wide_col in disp.columns:
+                grid_builder.configure_column(wide_col, minWidth=180, width=220)
         grid_builder.configure_grid_options(
             domLayout="normal",
             enableCellTextSelection=True,
+            suppressHorizontalScroll=False,
+            alwaysShowHorizontalScroll=True,
         )
         AgGrid(
             disp,
@@ -543,6 +553,7 @@ def render_app():
             fit_columns_on_grid_load=False,
             height=420,
             theme="streamlit",
+            allow_unsafe_jscode=True,
         )
     else:
         st.caption("安装 streamlit-aggrid 后，表头会显示筛选框：pip install streamlit-aggrid")
