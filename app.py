@@ -8,6 +8,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder
+except ImportError:
+    AgGrid = None
+    GridOptionsBuilder = None
+
 
 # Excel required columns.
 BOX_COLS = {"model": "型号", "length": "内径长", "width": "内径宽", "height": "内径高"}
@@ -519,7 +525,28 @@ def render_app():
     disp["综合评分"] = disp["综合评分"].map(lambda x: f"{x:.3f}")
 
     st.subheader("包装方案优选表")
-    st.dataframe(disp, use_container_width=True)
+    if AgGrid and GridOptionsBuilder:
+        grid_builder = GridOptionsBuilder.from_dataframe(disp)
+        grid_builder.configure_default_column(
+            filter=True,
+            sortable=True,
+            resizable=True,
+            floatingFilter=True,
+        )
+        grid_builder.configure_grid_options(
+            domLayout="normal",
+            enableCellTextSelection=True,
+        )
+        AgGrid(
+            disp,
+            gridOptions=grid_builder.build(),
+            fit_columns_on_grid_load=False,
+            height=420,
+            theme="streamlit",
+        )
+    else:
+        st.caption("安装 streamlit-aggrid 后，表头会显示筛选框：pip install streamlit-aggrid")
+        st.dataframe(disp, use_container_width=True)
 
     st.divider()
     c1, c2 = st.columns([1, 1.2])
