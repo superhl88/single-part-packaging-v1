@@ -2,6 +2,7 @@
 """航空零件包装选型程序。"""
 
 import math
+import io
 import re
 
 import pandas as pd
@@ -9,10 +10,16 @@ import plotly.graph_objects as go
 import streamlit as st
 
 try:
-    from st_aggrid import AgGrid, GridOptionsBuilder
+    from st_aggrid import AgGrid, GridOptionsBuilder, DataReturnMode
 except ImportError:
     AgGrid = None
     GridOptionsBuilder = None
+    DataReturnMode = None
+
+try:
+    from st_aggrid import GridUpdateMode
+except ImportError:
+    GridUpdateMode = None
 
 
 # Excel required columns.
@@ -470,6 +477,35 @@ def draw_3d_layout(box_dim, part_dim_tuple, layout, vh, t=6, layout_mode="分格
     return fig
 
 
+def build_bom_dataframe(item):
+    """Build one selected方案的领料 BOM."""
+    box_count = int(item["建议箱数"])
+    pad_count = int(item["raw"]["layout"][2] + 1)
+    return pd.DataFrame([
+        {"物料类型": "纸箱", "型号/规格": item["推荐纸箱"], "单箱用量": 1, "建议箱数": box_count, "合计用量": box_count, "单位": "个"},
+        {"物料类型": "横刀卡", "型号/规格": item["横刀型号"], "单箱用量": int(item["横刀总数"]), "建议箱数": box_count, "合计用量": int(item["横刀总数"]) * box_count, "单位": "把"},
+        {"物料类型": "竖刀卡", "型号/规格": item["竖刀型号"], "单箱用量": int(item["竖刀总数"]), "建议箱数": box_count, "合计用量": int(item["竖刀总数"]) * box_count, "单位": "把"},
+        {"物料类型": "平垫板", "型号/规格": "按纸箱内径配套", "单箱用量": pad_count, "建议箱数": box_count, "合计用量": pad_count * box_count, "单位": "张"},
+    ])
+
+
+def bom_to_excel_bytes(bom_df, item):
+    """Export BOM and selected方案摘要 to an Excel file."""
+    output = io.BytesIO()
+    summary = pd.DataFrame([
+        {"项目": "纸箱型号", "值": item["推荐纸箱"]},
+        {"项目": "排布方式", "值": item["排布方式"]},
+        {"项目": "结构方式", "值": item["结构方式"]},
+        {"项目": "格口空间(mm)", "值": f'{item["格口长"]:.1f} x {item["格口宽"]:.1f} x {item["格口高"]:.1f}'},
+        {"项目": "方向", "值": item["raw"]["rotate_note"]},
+        {"项目": "结果", "值": item["备注"]},
+    ])
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        bom_df.to_excel(writer, sheet_name="BOM", index=False)
+        summary.to_excel(writer, sheet_name="方案摘要", index=False)
+    return output.getvalue()
+
+
 def render_app():
     """Streamlit UI."""
     st.set_page_config(page_title="航空包装决策系统", layout="wide")
@@ -477,6 +513,8 @@ def render_app():
 
     if "res_data" not in st.session_state:
         st.session_state.res_data = None
+    if "selected_solution_idx" not in st.session_state:
+        st.session_state.selected_solution_idx = None
 
     with st.sidebar:
         f_box = st.file_uploader("纸箱库", type=["xlsx"])
@@ -502,6 +540,7 @@ def render_app():
                 pd.read_excel(f_box),
                 pd.read_excel(f_div),
             )
+            st.session_state.selected_solution_idx = None
         except Exception as exc:
             st.error(str(exc))
             return
@@ -525,8 +564,13 @@ def render_app():
     disp["综合评分"] = disp["综合评分"].map(lambda x: f"{x:.3f}")
 
     st.subheader("包装方案优选表")
+    selected_idx = st.session_state.selected_solution_idx
+    if selected_idx not in res.index:
+        selected_idx = res.index[0]
     if AgGrid and GridOptionsBuilder:
-        grid_builder = GridOptionsBuilder.from_dataframe(disp)
+        grid_disp = disp.copy()
+        grid_disp.insert(0, "方案ID", grid_disp.index)
+        grid_builder = GridOptionsBuilder.from_dataframe(grid_disp)
         grid_builder.configure_default_column(
             filter="agSetColumnFilter",
             sortable=True,
@@ -547,21 +591,64 @@ def render_app():
         for wide_col in ["推荐纸箱", "可用刀卡限制", "备注"]:
             if wide_col in disp.columns:
                 grid_builder.configure_column(wide_col, minWidth=180, width=220)
+        grid_builder.configure_column("方案ID", hide=True)
+        grid_builder.configure_selection(
+            selection_mode="single",
+            use_checkbox=False,
+            pre_selected_rows=[res.index.get_loc(selected_idx)],
+        )
         grid_builder.configure_grid_options(
             domLayout="normal",
             enableCellTextSelection=True,
+            rowSelection="single",
+            suppressRowClickSelection=False,
             suppressHorizontalScroll=False,
             alwaysShowHorizontalScroll=True,
         )
-        AgGrid(
-            disp,
+        aggrid_kwargs = {}
+        if GridUpdateMode is not None:
+            aggrid_kwargs["update_mode"] = GridUpdateMode.SELECTION_CHANGED
+        if DataReturnMode is not None:
+            aggrid_kwargs["data_return_mode"] = DataReturnMode.AS_INPUT
+        grid_response = AgGrid(
+            grid_disp,
             gridOptions=grid_builder.build(),
             fit_columns_on_grid_load=False,
             height=420,
             theme="streamlit",
+            key="packaging_solution_grid",
+            custom_css={
+                ".ag-row-selected .ag-cell": {
+                    "background-color": "#dbeafe !important",
+                    "color": "#0f172a !important",
+                    "font-weight": "600 !important",
+                },
+                ".ag-row-selected": {
+                    "border-left": "4px solid #2563eb !important",
+                },
+                ".ag-cell-focus": {
+                    "border": "1px solid #2563eb !important",
+                },
+            },
             allow_unsafe_jscode=True,
             enable_enterprise_modules=True,
+            update_on=["selectionChanged"],
+            **aggrid_kwargs,
         )
+        selected_rows = grid_response.get("selected_rows", [])
+        if isinstance(selected_rows, pd.DataFrame):
+            if not selected_rows.empty:
+                selected_idx = selected_rows.iloc[0]["方案ID"]
+        elif selected_rows:
+            selected_idx = selected_rows[0]["方案ID"]
+        if selected_idx not in res.index:
+            try:
+                selected_idx = int(selected_idx)
+            except (TypeError, ValueError):
+                selected_idx = res.index[0]
+        if selected_idx not in res.index:
+            selected_idx = res.index[0]
+        st.session_state.selected_solution_idx = selected_idx
     else:
         st.caption("安装 streamlit-aggrid 后，表头会显示筛选框：pip install streamlit-aggrid")
         st.dataframe(disp, use_container_width=True)
@@ -570,14 +657,53 @@ def render_app():
     c1, c2 = st.columns([1, 1.2])
 
     with c1:
-        selected_idx = st.selectbox(
-            "选择方案查看 BOM 和 3D：",
-            res.index.tolist(),
-            format_func=lambda idx: f"{res.loc[idx, '推荐纸箱']} - {res.loc[idx, '排布方式']}",
-        )
         item = res.loc[selected_idx]
         box_count = int(item["建议箱数"])
         pad_count = int(item["raw"]["layout"][2] + 1)
+        bom_df = build_bom_dataframe(item)
+        fig = draw_3d_layout(
+            item["raw"]["box"],
+            item["raw"]["part"],
+            item["raw"]["layout"],
+            item["raw"]["div_height"],
+            layout_mode=item["raw"].get("layout_mode", "分格"),
+            h_count=item["raw"].get("h_count_per_layer", 0),
+            v_count=item["raw"].get("v_count_per_layer", 0),
+        )
+
+        st.markdown(
+            f"""
+            <div style="
+                padding: 10px 14px;
+                margin: 0 0 12px 0;
+                border-left: 4px solid #2563eb;
+                background: #eff6ff;
+                color: #1e3a8a;
+                border-radius: 6px;
+                font-weight: 600;
+            ">
+                当前方案：{item['推荐纸箱']} - {item['排布方式']}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "导出 BOM",
+                data=bom_to_excel_bytes(bom_df, item),
+                file_name=f"BOM_{item['推荐纸箱']}_{item['排布方式']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        with dl2:
+            st.download_button(
+                "导出 3D 模型",
+                data=fig.to_html(include_plotlyjs=True),
+                file_name=f"3D_{item['推荐纸箱']}_{item['排布方式']}.html",
+                mime="text/html",
+                use_container_width=True,
+            )
 
         st.info(f"""
 ### 领料 BOM 清单
@@ -595,15 +721,7 @@ def render_app():
 
     with c2:
         st.plotly_chart(
-            draw_3d_layout(
-                item["raw"]["box"],
-                item["raw"]["part"],
-                item["raw"]["layout"],
-                item["raw"]["div_height"],
-                layout_mode=item["raw"].get("layout_mode", "分格"),
-                h_count=item["raw"].get("h_count_per_layer", 0),
-                v_count=item["raw"].get("v_count_per_layer", 0),
-            ),
+            fig,
             use_container_width=True,
         )
 
